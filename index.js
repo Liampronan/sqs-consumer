@@ -10,6 +10,16 @@ const requiredOptions = [
   'handleMessage'
 ];
 
+const CONSUMER_QUEUE_EVENTS = {
+  ERROR: 'error',
+  PROCESSING_ERROR: 'processing_error',
+  MESSAGE_RECEIVED: 'message_received',
+  MESSAGE_PROCESSED: 'message_processed',
+  REPONSE_PROCESSED: 'response_processed',
+  STOPPED: 'stopped',
+  EMPTY: 'empty',
+}
+
 class SQSError extends Error {
   constructor() {
     super(Array.from(arguments));
@@ -87,7 +97,7 @@ class Consumer extends EventEmitter {
       debug('Polling for messages');
       this.sqs.receiveMessage(receiveParams, this._handleSqsResponse);
     } else {
-      this.emit('stopped');
+      this.emit(CONSUMER_QUEUE_EVENTS.STOPPED);
     }
   }
 
@@ -95,7 +105,7 @@ class Consumer extends EventEmitter {
     const consumer = this;
 
     if (err) {
-      this.emit('error', new SQSError('SQS receive message failed: ' + err.message));
+      this.emit(CONSUMER_QUEUE_EVENTS.ERROR, new SQSError('SQS receive message failed: ' + err.message));
     }
 
     debug('Received SQS response');
@@ -104,11 +114,11 @@ class Consumer extends EventEmitter {
     if (response && response.Messages && response.Messages.length > 0) {
       async.each(response.Messages, this._processMessage, () => {
         // start polling again once all of the messages have been processed
-        consumer.emit('response_processed');
+        consumer.emit(CONSUMER_QUEUE_EVENTS.MESSAGE_PROCESSED);
         consumer._poll();
       });
     } else if (response && !response.Messages) {
-      this.emit('empty');
+      this.emit(CONSUMER_QUEUE_EVENTS.EMPTY);
       this._poll();
     } else if (err && isAuthenticationError(err)) {
       // there was an authentication error, so wait a bit before repolling
@@ -123,7 +133,7 @@ class Consumer extends EventEmitter {
   _processMessage(message, cb) {
     const consumer = this;
 
-    this.emit('message_received', message);
+    this.emit(CONSUMER_QUEUE_EVENTS.MESSAGE_RECEIVED, message);
     async.series([
       function handleMessage(done) {
         try {
@@ -138,9 +148,9 @@ class Consumer extends EventEmitter {
     ], (err) => {
       if (err) {
         if (err.name === SQSError.name) {
-          consumer.emit('error', err, message);
+          consumer.emit(CONSUMER_QUEUE_EVENTS.ERROR, err, message);
         } else {
-          consumer.emit('processing_error', err, message);
+          consumer.emit(CONSUMER_QUEUE_EVENTS.PROCESSING_ERROR, err, message);
         }
 
         if (consumer.terminateVisibilityTimeout) {
@@ -149,13 +159,13 @@ class Consumer extends EventEmitter {
             ReceiptHandle: message.ReceiptHandle,
             VisibilityTimeout: 0
           }, (err) => {
-            if (err) consumer.emit('error', err, message);
+            if (err) consumer.emit(CONSUMER_QUEUE_EVENTS.ERROR, err, message);
             cb();
           });
           return;
         }
       } else {
-        consumer.emit('message_processed', message);
+        consumer.emit(CONSUMER_QUEUE_EVENTS.MESSAGE_PROCESSED, message);
       }
       cb();
     });
